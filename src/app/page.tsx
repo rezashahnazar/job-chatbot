@@ -1,11 +1,5 @@
 import JobChat from "@/components/JobChat";
-import {
-  MessageSquare,
-  FileText,
-  Github,
-  ArrowUpRight,
-  Bot,
-} from "lucide-react";
+import { MessageSquare } from "lucide-react";
 
 export default function Home() {
   return (

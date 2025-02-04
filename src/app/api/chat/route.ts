@@ -1,5 +1,6 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import { streamText, smoothStream } from "ai";
+import { Message } from "ai";
 
 const openai = createOpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -32,13 +33,13 @@ export async function POST(req: Request) {
   const { messages } = await req.json();
 
   // Find system messages containing resume and GitHub information
-  const systemMessages = messages.filter((m: any) => m.role === "system");
+  const systemMessages = messages.filter((m: Message) => m.role === "system");
   const resumeContext =
-    systemMessages.find((m: any) =>
+    systemMessages.find((m: Message) =>
       m.content?.startsWith("User's Resume Analysis")
     )?.content || "";
   const githubContext =
-    systemMessages.find((m: any) =>
+    systemMessages.find((m: Message) =>
       m.content?.startsWith("GitHub Repository Analysis")
     )?.content || "";
 
@@ -63,7 +64,7 @@ ${
   const stream = await streamText({
     model: openai("gpt-4o-mini"),
     system: enhancedSystemPrompt,
-    messages: messages.filter((m: any) => m.role !== "system"), // Remove system messages from chat history
+    messages: messages.filter((m: Message) => m.role !== "system"), // Remove system messages from chat history
     experimental_transform: [smoothStream()],
   });
 

@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
               .join("\n")
               .trim();
             resolve(text || "");
-          } catch (err) {
+          } catch {
             reject(new Error("Failed to extract text from PDF"));
           }
         });

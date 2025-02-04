@@ -9,7 +9,6 @@ import {
   Loader2,
   MessageSquare,
   FileText,
-  ArrowDown,
   Bot,
   Square,
   Github,
@@ -26,6 +25,13 @@ import TextareaAutosize from "react-textarea-autosize";
 import { Message } from "ai";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/cjs/styles/prism";
+
+interface ResumeAnalysis {
+  score: number;
+  strengths: string[];
+  improvements: string[];
+  feedback: string;
+}
 
 function LoadingMessage() {
   return (
@@ -60,40 +66,26 @@ export default function JobChat() {
     api: "/api/chat",
   });
 
-  // GitHub chat instance
-  const {
-    messages: githubMessages,
-    handleSubmit: handleGithubChatSubmit,
-    isLoading: isGithubLoading,
-    input: githubUrl,
-    handleInputChange: handleGithubInputChange,
-    setMessages: setGithubMessages,
-    stop: stopGithub,
-  } = useChat({
-    api: "/api/github",
-    id: "github-analysis",
-    initialInput: "",
-  });
-
-  // We don't need lastGithubAnalysis state anymore since we'll show messages directly
+  // GitHub-specific state
+  const [githubUrl, setGithubUrl] = useState("");
   const [githubLoading, setGithubLoading] = useState(false);
+  const [githubMessages, setGithubMessages] = useState<Message[]>([]);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
-  const [showScrollButton, setShowScrollButton] = useState(false);
-  const lastMessageRef = useRef<string | null>(null);
-  const lastIsLoadingRef = useRef(isLoading);
-  const lastGithubMessageRef = useRef<string | null>(null);
-  const lastGithubIsLoadingRef = useRef(isGithubLoading);
-
+  // File upload state
+  const [file, setFile] = useState<File | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [position, setPosition] = useState("");
-  const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [analysis, setAnalysis] = useState<any>(null);
-  const [showAnalysis, setShowAnalysis] = useState(false);
+
+  // Refs
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const lastMessageRef = useRef<string | null>(null);
+  const lastIsLoadingRef = useRef(isLoading);
+  const lastGithubMessageRef = useRef<string | null>(null);
+  const lastGithubIsLoadingRef = useRef(isLoading);
 
   // Auto scroll to bottom
   const scrollToBottom = (behavior: "auto" | "smooth" = "smooth") => {
@@ -106,9 +98,11 @@ export default function JobChat() {
 
     const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.current;
     const scrollPosition = scrollHeight - scrollTop - clientHeight;
-    const threshold = 100; // Show button when user has scrolled up more than 100px from bottom
+    const threshold = 100;
 
-    setShowScrollButton(scrollPosition > threshold);
+    if (scrollPosition > threshold) {
+      scrollToBottom();
+    }
   };
 
   // Scroll to bottom only after message submission or during streaming
@@ -122,17 +116,17 @@ export default function JobChat() {
 
     const isStreamingStarted =
       (!lastIsLoadingRef.current && isLoading) ||
-      (!lastGithubIsLoadingRef.current && isGithubLoading);
+      (!lastGithubIsLoadingRef.current && isLoading);
 
     const isStreamingMessage =
       (isLoading && lastMessage?.role === "assistant") ||
-      (isGithubLoading && lastGithubMessage?.role === "assistant");
+      (isLoading && lastGithubMessage?.role === "assistant");
 
     // Update refs for next comparison
     lastMessageRef.current = lastMessage?.content ?? null;
     lastIsLoadingRef.current = isLoading;
     lastGithubMessageRef.current = lastGithubMessage?.content ?? null;
-    lastGithubIsLoadingRef.current = isGithubLoading;
+    lastGithubIsLoadingRef.current = isLoading;
 
     // Scroll conditions:
     // 1. New user message was just submitted (from either chat)
@@ -146,91 +140,60 @@ export default function JobChat() {
     ) {
       scrollToBottom(isStreamingMessage ? "auto" : "smooth");
     }
-  }, [messages, isLoading, githubMessages, isGithubLoading]);
+  }, [messages, isLoading, githubMessages]);
 
   // Function to check if a message contains a GitHub repository URL
-  const containsGithubUrl = (text: string) => {
-    return /https:\/\/github\.com\/[\w-]+\/[\w-]+/.test(text);
+  const checkGithubUrl = (text: string) => {
+    const url = text.match(/https:\/\/github\.com\/[\w-]+\/[\w-]+/)?.[0];
+    if (url) {
+      setGithubUrl(url);
+      const syntheticEvent = { preventDefault: () => {} } as React.FormEvent;
+      handleGithubRepoSubmit(syntheticEvent);
+    }
   };
 
-  // Function to extract GitHub URL from text
-  const extractGithubUrl = (text: string) => {
-    const match = text.match(/https:\/\/github\.com\/[\w-]+\/[\w-]+/);
-    return match ? match[0] : null;
-  };
-
-  // Handle regular chat submission
-  const handleSubmit = (e: React.FormEvent) => {
+  // Handle message submission with GitHub URL detection
+  const handleMessageSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
+
+    // Check if message contains GitHub URL
+    checkGithubUrl(input);
     handleChatSubmit(e);
   };
 
-  // Function to create a system message from GitHub analysis
-  const createGithubAnalysisSystemMessage = (githubMessages: Message[]) => {
-    const lastAssistantMessage = githubMessages.findLast(
-      (m) => m.role === "assistant"
-    );
-    if (!lastAssistantMessage) return null;
-
-    return {
-      id: `github-context-${Date.now()}`,
-      role: "system",
-      content: `GitHub Repository Analysis Context:
-${lastAssistantMessage.content}
-
-Please use this repository analysis information when answering questions about the user's GitHub project.`,
-    } as Message;
-  };
-
-  // Effect to update main chat context when GitHub analysis is completed
-  useEffect(() => {
-    const lastMessage = githubMessages[githubMessages.length - 1];
-    if (lastMessage?.role === "assistant" && !isGithubLoading) {
-      const systemMessage = createGithubAnalysisSystemMessage(githubMessages);
-      if (systemMessage) {
-        setMessages((prevMessages) => {
-          // Find and remove any previous GitHub analysis context
-          const messagesWithoutPreviousGithub = prevMessages.filter(
-            (m) => !m.id?.startsWith("github-context-")
-          );
-          // Add the new GitHub analysis context at the beginning
-          return [systemMessage, ...messagesWithoutPreviousGithub];
-        });
-
-        // Add a notification message
-        setMessages((prevMessages) => [
-          ...prevMessages,
-          {
-            id: `notification-${Date.now()}`,
-            role: "assistant",
-            content:
-              "✨ تحلیل مخزن گیت‌هاب به عنوان زمینه به چت اضافه شد. می‌توانید سوالات خود را درباره پروژه بپرسید.",
-          } as Message,
-        ]);
+  // Handle textarea key press
+  const handleKeyPress = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (input.trim()) {
+        handleChatSubmit(e);
       }
     }
-  }, [githubMessages, isGithubLoading, setMessages]);
+  };
 
-  // Handle GitHub repository submission
+  // Handle GitHub repo submission
   const handleGithubRepoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!githubUrl.trim()) return;
+    if (!githubUrl.trim() || githubLoading) return;
 
-    const validGithubUrl = extractGithubUrl(githubUrl);
-    if (!validGithubUrl) {
-      alert("لطفاً یک لینک معتبر گیت‌هاب وارد کنید");
-      return;
-    }
-
+    setGithubLoading(true);
     try {
-      setGithubLoading(true);
-      await handleGithubChatSubmit(e);
-    } catch (error) {
-      console.error("GitHub analysis error:", error);
-      alert(
-        "متأسفانه در تحلیل مخزن گیت‌هاب خطایی رخ داد. لطفاً مجدداً تلاش کنید."
-      );
+      const response = await fetch("/api/github", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: githubUrl }),
+      });
+
+      if (!response.ok) throw new Error("Failed to analyze repository");
+
+      const data = await response.json();
+      setGithubMessages((prevMessages) => [
+        ...prevMessages,
+        data.message as Message,
+      ]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "An error occurred");
     } finally {
       setGithubLoading(false);
     }
@@ -246,18 +209,8 @@ Please use this repository analysis information when answering questions about t
     });
   }, [messages, githubMessages]);
 
-  // Handle textarea key press
-  const handleKeyPress = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (input.trim()) {
-        handleSubmit(e as any);
-      }
-    }
-  };
-
   // Helper function to convert comma-separated string to markdown list
-  const formatToMarkdownList = (text: unknown) => {
+  const formatToMarkdownList = (text: string | string[]) => {
     if (!text) return "";
 
     // Handle array input
@@ -278,7 +231,7 @@ Please use this repository analysis information when answering questions about t
   };
 
   // Function to create a system message about the resume
-  const createResumeSystemMessage = (analysis: any) => {
+  const createResumeSystemMessage = (analysis: ResumeAnalysis) => {
     const formattedStrengths = formatToMarkdownList(analysis.strengths);
     const formattedImprovements = formatToMarkdownList(analysis.improvements);
 
@@ -317,9 +270,9 @@ Please use this information when answering questions about the user's resume.`,
       setError("Please fill in all required fields");
       return;
     }
+
     setLoading(true);
     setError(null);
-    setShowAnalysis(false);
 
     try {
       const formData = new FormData();
@@ -338,9 +291,6 @@ Please use this information when answering questions about the user's resume.`,
       if (!response.ok) {
         throw new Error(data.error || "Something went wrong");
       }
-
-      setAnalysis(data.analysis);
-      setShowAnalysis(true);
 
       // Add resume context to chat
       const systemMessage = createResumeSystemMessage(data.analysis);
@@ -491,7 +441,7 @@ Please use this information when answering questions about the user's resume.`,
                 type="url"
                 placeholder="مثال: https://github.com/username/repo"
                 value={githubUrl}
-                onChange={handleGithubInputChange}
+                onChange={(e) => setGithubUrl(e.target.value)}
                 className="bg-background/50 text-left"
                 dir="ltr"
               />
@@ -623,7 +573,7 @@ Please use this information when answering questions about the user's resume.`,
 
           {/* Chat Input */}
           <div className="border-t p-4 bg-background/50">
-            <form onSubmit={handleSubmit} className="flex gap-2">
+            <form onSubmit={handleMessageSubmit} className="flex gap-2">
               <TextareaAutosize
                 value={input}
                 onChange={handleInputChange}
