@@ -1,0 +1,137 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Set base font size to 10px on small screens */
+  html {
+    font-size: 75%; /* 12px */
+  }
+
+  @media (min-width: 375px) {
+    html {
+      font-size: 87.5%; /* 14px */
+    }
+  }
+
+  /* Reset to 16px on medium screens and above */
+  @media (min-width: 768px) {
+    html {
+      font-size: 100%; /* 16px */
+    }
+  }
+
+  :root {
+    /* Base colors */
+    --white: #fff;
+    --black: #000;
+    --gray-50: #f9f9f9;
+    --gray-100: #ececec;
+    --gray-200: #e3e3e3;
+    --gray-300: #cdcdcd;
+    --gray-400: #b4b4b4;
+    --gray-500: #9b9b9b;
+    --gray-600: #676767;
+    --gray-700: #424242;
+    --gray-750: #2f2f2f;
+    --gray-800: #212121;
+    --gray-900: #171717;
+    --gray-950: #0d0d0d;
+    --brand-purple: #ab68ff;
+
+    /* Theme colors - Light mode */
+    --background: 0 0% 100%;
+    --foreground: 0 0% 15%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 15%;
+    --primary: 270 100% 70%;
+    --primary-rgb: 171, 104, 255;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 15%;
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 40%;
+    --accent: 0 0% 96%;
+    --accent-foreground: 0 0% 15%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 92%;
+    --input: 0 0% 100%;
+    --input-foreground: 0 0% 15%;
+    --ring: 270 100% 70%;
+    --radius: 0.75rem;
+
+    /* Surface colors */
+    --main-surface-background: rgba(255, 255, 255, 0.9);
+    --message-surface: rgba(247, 247, 247, 0.85);
+    --sidebar-surface: #f7f7f8;
+    --sidebar-surface-floating: rgba(255, 255, 255, 0.95);
+    
+    /* Spring animations */
+    --spring-fast-duration: 667ms;
+    --spring-common-duration: 667ms;
+    --spring-bounce-duration: 833ms;
+    --spring-slow-bounce-duration: 1167ms;
+    --spring-fast-bounce-duration: 1000ms;
+  }
+
+  .dark {
+    /* Theme colors - Dark mode */
+    --background: 0 0% 10%;
+    --foreground: 0 0% 100%;
+    --card: 0 0% 15%;
+    --card-foreground: 0 0% 100%;
+    --popover: 0 0% 15%;
+    --popover-foreground: 0 0% 100%;
+    --primary: 270 100% 70%;
+    --primary-foreground: 0 0% 10%;
+    --secondary: 0 0% 15%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 65%;
+    --accent: 0 0% 20%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 20%;
+    --input: 0 0% 15%;
+    --input-foreground: 0 0% 100%;
+    --ring: 270 100% 70%;
+
+    /* Surface colors - Dark mode */
+    --main-surface-background: rgba(33, 33, 33, 0.9);
+    --message-surface: rgba(50, 50, 50, 0.85);
+    --sidebar-surface: #2b2b2b;
+    --sidebar-surface-floating: rgba(45, 45, 45, 0.95);
+  }
+
+  * {
+    @apply border-border transition-colors duration-200;
+  }
+}
+
+@layer utilities {
+  /* Custom Scrollbar */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--primary) / 0.1);
+    border-radius: 20px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--primary) / 0.2);
+  }
+}

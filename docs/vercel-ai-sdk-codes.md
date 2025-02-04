@@ -1,0 +1,1040 @@
+here is the source code for smoothStream in Vercel AI SDK's project:
+
+```tsx
+import { InvalidArgumentError } from "@ai-sdk/provider";
+import { delay as originalDelay } from "../../util/delay";
+import { CoreTool } from "../tool/tool";
+import { TextStreamPart } from "./stream-text-result";
+
+const CHUNKING_REGEXPS = {
+  word: /\s*\S+\s+/m,
+  line: /[^\n]*\n/m,
+};
+
+/**
+ * Smooths text streaming output.
+ *
+ * @param delayInMs - The delay in milliseconds between each chunk. Defaults to 10ms. Can be set to `null` to skip the delay.
+ * @param chunking - Controls how the text is chunked for streaming. Use "word" to stream word by word (default), "line" to stream line by line, or provide a custom RegExp pattern for custom chunking.
+ *
+ * @returns A transform stream that smooths text streaming output.
+ */
+export function smoothStream<TOOLS extends Record<string, CoreTool>>({
+  delayInMs = 10,
+  chunking = "word",
+  _internal: { delay = originalDelay } = {},
+}: {
+  delayInMs?: number | null;
+  chunking?: "word" | "line" | RegExp;
+  /**
+   * Internal. For test use only. May change without notice.
+   */
+  _internal?: {
+    delay?: (delayInMs: number | null) => Promise<void>;
+  };
+} = {}): (options: {
+  tools: TOOLS;
+}) => TransformStream<TextStreamPart<TOOLS>, TextStreamPart<TOOLS>> {
+  const chunkingRegexp =
+    typeof chunking === "string" ? CHUNKING_REGEXPS[chunking] : chunking;
+
+  if (chunkingRegexp == null) {
+    throw new InvalidArgumentError({
+      argument: "chunking",
+      message: `Chunking must be "word" or "line" or a RegExp. Received: ${chunking}`,
+    });
+  }
+
+  return () => {
+    let buffer = "";
+    return new TransformStream<TextStreamPart<TOOLS>, TextStreamPart<TOOLS>>({
+      async transform(chunk, controller) {
+        if (chunk.type === "step-finish") {
+          if (buffer.length > 0) {
+            controller.enqueue({ type: "text-delta", textDelta: buffer });
+            buffer = "";
+          }
+
+          controller.enqueue(chunk);
+          return;
+        }
+
+        if (chunk.type !== "text-delta") {
+          controller.enqueue(chunk);
+          return;
+        }
+
+        buffer += chunk.textDelta;
+
+        let match;
+        while ((match = chunkingRegexp.exec(buffer)) != null) {
+          const chunk = match[0];
+          controller.enqueue({ type: "text-delta", textDelta: chunk });
+          buffer = buffer.slice(chunk.length);
+
+          await delay(delayInMs);
+        }
+      },
+    });
+  };
+}
+```
+
+Here is also the delay method used in the code:
+
+```tsx
+/**
+ * Creates a Promise that resolves after a specified delay
+ * @param delayInMs - The delay duration in milliseconds. If null or undefined, resolves immediately.
+ * @returns A Promise that resolves after the specified delay
+ */
+export async function delay(delayInMs?: number | null): Promise<void> {
+  return delayInMs == null
+    ? Promise.resolve()
+    : new Promise((resolve) => setTimeout(resolve, delayInMs));
+}
+```
+
+Here is the code including the StreamTextResult interface:
+
+```tsx
+import { ServerResponse } from "node:http";
+import { StreamData } from "../../streams/stream-data";
+import { DataStreamWriter } from "../data-stream/data-stream-writer";
+import { CoreAssistantMessage, CoreToolMessage } from "../prompt/message";
+import { CoreTool } from "../tool";
+import {
+  CallWarning,
+  FinishReason,
+  LanguageModelRequestMetadata,
+  LogProbs,
+  ProviderMetadata,
+} from "../types";
+import { LanguageModelResponseMetadata } from "../types/language-model-response-metadata";
+import { LanguageModelUsage } from "../types/usage";
+import { AsyncIterableStream } from "../util/async-iterable-stream";
+import { StepResult } from "./step-result";
+import { ToolCallUnion } from "./tool-call";
+import { ToolResultUnion } from "./tool-result";
+
+/**
+A result object for accessing different stream types and additional information.
+ */
+export interface StreamTextResult<
+  TOOLS extends Record<string, CoreTool>,
+  PARTIAL_OUTPUT
+> {
+  /**
+Warnings from the model provider (e.g. unsupported settings) for the first step.
+     */
+  readonly warnings: Promise<CallWarning[] | undefined>;
+
+  /**
+The total token usage of the generated response.
+When there are multiple steps, the usage is the sum of all step usages.
+
+Resolved when the response is finished.
+     */
+  readonly usage: Promise<LanguageModelUsage>;
+
+  /**
+The reason why the generation finished. Taken from the last step.
+
+Resolved when the response is finished.
+     */
+  readonly finishReason: Promise<FinishReason>;
+
+  /**
+Additional provider-specific metadata from the last step.
+Metadata is passed through from the provider to the AI SDK and
+enables provider-specific results that can be fully encapsulated in the provider.
+   */
+  readonly experimental_providerMetadata: Promise<ProviderMetadata | undefined>;
+
+  /**
+The full text that has been generated by the last step.
+
+Resolved when the response is finished.
+     */
+  readonly text: Promise<string>;
+
+  /**
+The reasoning that has been generated by the last step.
+
+Resolved when the response is finished.
+     */
+  readonly reasoning: Promise<string | undefined>;
+
+  /**
+The tool calls that have been executed in the last step.
+
+Resolved when the response is finished.
+     */
+  readonly toolCalls: Promise<ToolCallUnion<TOOLS>[]>;
+
+  /**
+The tool results that have been generated in the last step.
+
+Resolved when the all tool executions are finished.
+     */
+  readonly toolResults: Promise<ToolResultUnion<TOOLS>[]>;
+
+  /**
+Details for all steps.
+You can use this to get information about intermediate steps,
+such as the tool calls or the response headers.
+   */
+  readonly steps: Promise<Array<StepResult<TOOLS>>>;
+
+  /**
+Additional request information from the last step.
+ */
+  readonly request: Promise<LanguageModelRequestMetadata>;
+
+  /**
+Additional response information from the last step.
+ */
+  readonly response: Promise<
+    LanguageModelResponseMetadata & {
+      /**
+The response messages that were generated during the call. It consists of an assistant message,
+potentially containing tool calls.
+
+When there are tool results, there is an additional tool message with the tool results that are available.
+If there are tools that do not have execute functions, they are not included in the tool results and
+need to be added separately.
+       */
+      messages: Array<CoreAssistantMessage | CoreToolMessage>;
+    }
+  >;
+
+  /**
+  A text stream that returns only the generated text deltas. You can use it
+  as either an AsyncIterable or a ReadableStream. When an error occurs, the
+  stream will throw the error.
+     */
+  readonly textStream: AsyncIterableStream<string>;
+
+  /**
+  A stream with all events, including text deltas, tool calls, tool results, and
+  errors.
+  You can use it as either an AsyncIterable or a ReadableStream.
+  Only errors that stop the stream, such as network errors, are thrown.
+     */
+  readonly fullStream: AsyncIterableStream<TextStreamPart<TOOLS>>;
+
+  /**
+A stream of partial outputs. It uses the `experimental_output` specification.
+   */
+  readonly experimental_partialOutputStream: AsyncIterableStream<PARTIAL_OUTPUT>;
+
+  /**
+  Converts the result to a data stream.
+
+  @param data an optional StreamData object that will be merged into the stream.
+  @param getErrorMessage an optional function that converts an error to an error message.
+  @param sendUsage whether to send the usage information to the client. Defaults to true.
+  @param sendReasoning whether to send the reasoning information to the client. Defaults to false.
+  @return A data stream.
+     */
+  toDataStream(options?: {
+    data?: StreamData;
+    getErrorMessage?: (error: unknown) => string;
+    sendUsage?: boolean; // default to true (TODO change to false in v5: secure by default)
+    sendReasoning?: boolean; // default to false
+  }): ReadableStream<Uint8Array>;
+
+  /**
+   * Merges the result as a data stream into another data stream.
+   *
+   * @param dataStream A data stream writer.
+   * @param options.sendUsage Whether to send the usage information to the client. Defaults to true.
+   * @param options.sendReasoning Whether to send the reasoning information to the client. Defaults to false.
+   */
+  mergeIntoDataStream(
+    dataStream: DataStreamWriter,
+    options?: {
+      sendUsage?: boolean;
+      sendReasoning?: boolean;
+    }
+  ): void;
+
+  /**
+  Writes data stream output to a Node.js response-like object.
+
+  @param response A Node.js response-like object (ServerResponse).
+  @param options.status The status code.
+  @param options.statusText The status text.
+  @param options.headers The headers.
+  @param options.data The stream data.
+  @param options.getErrorMessage An optional function that converts an error to an error message.
+  @param options.sendUsage Whether to send the usage information to the client. Defaults to true.
+  @param options.sendReasoning Whether to send the reasoning information to the client. Defaults to false.
+     */
+  pipeDataStreamToResponse(
+    response: ServerResponse,
+    options?: ResponseInit & {
+      data?: StreamData;
+      getErrorMessage?: (error: unknown) => string;
+      sendUsage?: boolean; // default to true (TODO change to false in v5: secure by default)
+      sendReasoning?: boolean; // default to false
+    }
+  ): void;
+
+  /**
+  Writes text delta output to a Node.js response-like object.
+  It sets a `Content-Type` header to `text/plain; charset=utf-8` and
+  writes each text delta as a separate chunk.
+
+  @param response A Node.js response-like object (ServerResponse).
+  @param init Optional headers, status code, and status text.
+     */
+  pipeTextStreamToResponse(response: ServerResponse, init?: ResponseInit): void;
+
+  /**
+  Converts the result to a streamed response object with a stream data part stream.
+  It can be used with the `useChat` and `useCompletion` hooks.
+
+  @param options.status The status code.
+  @param options.statusText The status text.
+  @param options.headers The headers.
+  @param options.data The stream data.
+  @param options.getErrorMessage An optional function that converts an error to an error message.
+  @param options.sendUsage Whether to send the usage information to the client. Defaults to true.
+  @param options.sendReasoning Whether to send the reasoning information to the client. Defaults to false.
+
+  @return A response object.
+     */
+  toDataStreamResponse(
+    options?: ResponseInit & {
+      data?: StreamData;
+      getErrorMessage?: (error: unknown) => string;
+      sendUsage?: boolean; // default to true (TODO change to false in v5: secure by default)
+      sendReasoning?: boolean; // default to false
+    }
+  ): Response;
+
+  /**
+  Creates a simple text stream response.
+  Each text delta is encoded as UTF-8 and sent as a separate chunk.
+  Non-text-delta events are ignored.
+
+  @param init Optional headers, status code, and status text.
+     */
+  toTextStreamResponse(init?: ResponseInit): Response;
+}
+
+export type TextStreamPart<TOOLS extends Record<string, CoreTool>> =
+  | {
+      type: "text-delta";
+      textDelta: string;
+    }
+  | {
+      type: "reasoning";
+      textDelta: string;
+    }
+  | ({
+      type: "tool-call";
+    } & ToolCallUnion<TOOLS>)
+  | {
+      type: "tool-call-streaming-start";
+      toolCallId: string;
+      toolName: string;
+    }
+  | {
+      type: "tool-call-delta";
+      toolCallId: string;
+      toolName: string;
+      argsTextDelta: string;
+    }
+  | ({
+      type: "tool-result";
+    } & ToolResultUnion<TOOLS>)
+  | {
+      type: "step-start";
+      messageId: string;
+      request: LanguageModelRequestMetadata;
+      warnings: CallWarning[];
+    }
+  | {
+      type: "step-finish";
+      messageId: string;
+
+      // TODO 5.0 breaking change: remove logprobs
+      logprobs?: LogProbs;
+      // TODO 5.0 breaking change: remove request (on start instead)
+      request: LanguageModelRequestMetadata;
+      // TODO 5.0 breaking change: remove warnings (on start instead)
+      warnings: CallWarning[] | undefined;
+
+      response: LanguageModelResponseMetadata;
+      usage: LanguageModelUsage;
+      finishReason: FinishReason;
+      experimental_providerMetadata?: ProviderMetadata;
+      isContinued: boolean;
+    }
+  | {
+      type: "finish";
+      finishReason: FinishReason;
+      usage: LanguageModelUsage;
+      experimental_providerMetadata?: ProviderMetadata;
+
+      /**
+       * @deprecated will be moved into provider metadata
+       */
+      // TODO 5.0 breaking change: remove logprobs
+      logprobs?: LogProbs;
+
+      /**
+       * @deprecated use response on step-finish instead
+       */
+      // TODO 5.0 breaking change: remove response (on step instead)
+      response: LanguageModelResponseMetadata;
+    }
+  | {
+      type: "error";
+      error: unknown;
+    };
+```
+
+Also you can use these code from Vercel AI SDK's project for inspiration:
+
+```tsx
+import { DataStreamString, formatDataStreamPart } from "@ai-sdk/ui-utils";
+import { DataStreamWriter } from "./data-stream-writer";
+
+export function createDataStream({
+  execute,
+  onError = () => "An error occurred.", // mask error messages for safety by default
+}: {
+  execute: (dataStream: DataStreamWriter) => Promise<void> | void;
+  onError?: (error: unknown) => string;
+}): ReadableStream<DataStreamString> {
+  let controller!: ReadableStreamDefaultController<string>;
+
+  const ongoingStreamPromises: Promise<void>[] = [];
+
+  const stream = new ReadableStream({
+    start(controllerArg) {
+      controller = controllerArg;
+    },
+  });
+
+  function safeEnqueue(data: DataStreamString) {
+    try {
+      controller.enqueue(data);
+    } catch (error) {
+      // suppress errors when the stream has been closed
+    }
+  }
+
+  try {
+    const result = execute({
+      writeData(data) {
+        safeEnqueue(formatDataStreamPart("data", [data]));
+      },
+      writeMessageAnnotation(annotation) {
+        safeEnqueue(formatDataStreamPart("message_annotations", [annotation]));
+      },
+      merge(streamArg) {
+        ongoingStreamPromises.push(
+          (async () => {
+            const reader = streamArg.getReader();
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              safeEnqueue(value);
+            }
+          })().catch((error) => {
+            safeEnqueue(formatDataStreamPart("error", onError(error)));
+          })
+        );
+      },
+      onError,
+    });
+
+    if (result) {
+      ongoingStreamPromises.push(
+        result.catch((error) => {
+          safeEnqueue(formatDataStreamPart("error", onError(error)));
+        })
+      );
+    }
+  } catch (error) {
+    safeEnqueue(formatDataStreamPart("error", onError(error)));
+  }
+
+  // Wait until all ongoing streams are done. This approach enables merging
+  // streams even after execute has returned, as long as there is still an
+  // open merged stream. This is important to e.g. forward new streams and
+  // from callbacks.
+  const waitForStreams: Promise<void> = new Promise(async (resolve) => {
+    while (ongoingStreamPromises.length > 0) {
+      await ongoingStreamPromises.shift();
+    }
+    resolve();
+  });
+
+  waitForStreams.finally(() => {
+    try {
+      controller.close();
+    } catch (error) {
+      // suppress errors when the stream has been closed
+    }
+  });
+
+  return stream;
+}
+```
+
+Here is the code for the pipeDataStreamToResponse function:
+
+```tsx
+import { ServerResponse } from "node:http";
+import { prepareOutgoingHttpHeaders } from "../util/prepare-outgoing-http-headers";
+import { writeToServerResponse } from "../util/write-to-server-response";
+import { createDataStream } from "./create-data-stream";
+import { DataStreamWriter } from "./data-stream-writer";
+
+export function pipeDataStreamToResponse(
+  response: ServerResponse,
+  {
+    status,
+    statusText,
+    headers,
+    execute,
+    onError,
+  }: ResponseInit & {
+    execute: (writer: DataStreamWriter) => Promise<void> | void;
+    onError?: (error: unknown) => string;
+  }
+): void {
+  writeToServerResponse({
+    response,
+    status,
+    statusText,
+    headers: prepareOutgoingHttpHeaders(headers, {
+      contentType: "text/plain; charset=utf-8",
+      dataStreamVersion: "v1",
+    }),
+    stream: createDataStream({ execute, onError }).pipeThrough(
+      new TextEncoderStream()
+    ),
+  });
+}
+```
+
+Here is the code for formatStreamDataParts:
+
+````tsx
+import { LanguageModelV1FinishReason } from "@ai-sdk/provider";
+import {
+  ToolCall as CoreToolCall,
+  ToolResult as CoreToolResult,
+} from "@ai-sdk/provider-utils";
+import { JSONValue } from "./types";
+
+export type DataStreamString =
+  `${(typeof DataStreamStringPrefixes)[keyof typeof DataStreamStringPrefixes]}:${string}\n`;
+
+export interface DataStreamPart<
+  CODE extends string,
+  NAME extends string,
+  TYPE
+> {
+  code: CODE;
+  name: NAME;
+  parse: (value: JSONValue) => { type: NAME; value: TYPE };
+}
+
+const textStreamPart: DataStreamPart<"0", "text", string> = {
+  code: "0",
+  name: "text",
+  parse: (value: JSONValue) => {
+    if (typeof value !== "string") {
+      throw new Error('"text" parts expect a string value.');
+    }
+    return { type: "text", value };
+  },
+};
+
+const dataStreamPart: DataStreamPart<"2", "data", Array<JSONValue>> = {
+  code: "2",
+  name: "data",
+  parse: (value: JSONValue) => {
+    if (!Array.isArray(value)) {
+      throw new Error('"data" parts expect an array value.');
+    }
+
+    return { type: "data", value };
+  },
+};
+
+const errorStreamPart: DataStreamPart<"3", "error", string> = {
+  code: "3",
+  name: "error",
+  parse: (value: JSONValue) => {
+    if (typeof value !== "string") {
+      throw new Error('"error" parts expect a string value.');
+    }
+    return { type: "error", value };
+  },
+};
+
+const messageAnnotationsStreamPart: DataStreamPart<
+  "8",
+  "message_annotations",
+  Array<JSONValue>
+> = {
+  code: "8",
+  name: "message_annotations",
+  parse: (value: JSONValue) => {
+    if (!Array.isArray(value)) {
+      throw new Error('"message_annotations" parts expect an array value.');
+    }
+
+    return { type: "message_annotations", value };
+  },
+};
+
+const toolCallStreamPart: DataStreamPart<
+  "9",
+  "tool_call",
+  CoreToolCall<string, any>
+> = {
+  code: "9",
+  name: "tool_call",
+  parse: (value: JSONValue) => {
+    if (
+      value == null ||
+      typeof value !== "object" ||
+      !("toolCallId" in value) ||
+      typeof value.toolCallId !== "string" ||
+      !("toolName" in value) ||
+      typeof value.toolName !== "string" ||
+      !("args" in value) ||
+      typeof value.args !== "object"
+    ) {
+      throw new Error(
+        '"tool_call" parts expect an object with a "toolCallId", "toolName", and "args" property.'
+      );
+    }
+
+    return {
+      type: "tool_call",
+      value: value as unknown as CoreToolCall<string, any>,
+    };
+  },
+};
+
+const toolResultStreamPart: DataStreamPart<
+  "a",
+  "tool_result",
+  Omit<CoreToolResult<string, any, any>, "args" | "toolName">
+> = {
+  code: "a",
+  name: "tool_result",
+  parse: (value: JSONValue) => {
+    if (
+      value == null ||
+      typeof value !== "object" ||
+      !("toolCallId" in value) ||
+      typeof value.toolCallId !== "string" ||
+      !("result" in value)
+    ) {
+      throw new Error(
+        '"tool_result" parts expect an object with a "toolCallId" and a "result" property.'
+      );
+    }
+
+    return {
+      type: "tool_result",
+      value: value as unknown as Omit<
+        CoreToolResult<string, any, any>,
+        "args" | "toolName"
+      >,
+    };
+  },
+};
+
+const toolCallStreamingStartStreamPart: DataStreamPart<
+  "b",
+  "tool_call_streaming_start",
+  { toolCallId: string; toolName: string }
+> = {
+  code: "b",
+  name: "tool_call_streaming_start",
+  parse: (value: JSONValue) => {
+    if (
+      value == null ||
+      typeof value !== "object" ||
+      !("toolCallId" in value) ||
+      typeof value.toolCallId !== "string" ||
+      !("toolName" in value) ||
+      typeof value.toolName !== "string"
+    ) {
+      throw new Error(
+        '"tool_call_streaming_start" parts expect an object with a "toolCallId" and "toolName" property.'
+      );
+    }
+
+    return {
+      type: "tool_call_streaming_start",
+      value: value as unknown as { toolCallId: string; toolName: string },
+    };
+  },
+};
+
+const toolCallDeltaStreamPart: DataStreamPart<
+  "c",
+  "tool_call_delta",
+  { toolCallId: string; argsTextDelta: string }
+> = {
+  code: "c",
+  name: "tool_call_delta",
+  parse: (value: JSONValue) => {
+    if (
+      value == null ||
+      typeof value !== "object" ||
+      !("toolCallId" in value) ||
+      typeof value.toolCallId !== "string" ||
+      !("argsTextDelta" in value) ||
+      typeof value.argsTextDelta !== "string"
+    ) {
+      throw new Error(
+        '"tool_call_delta" parts expect an object with a "toolCallId" and "argsTextDelta" property.'
+      );
+    }
+
+    return {
+      type: "tool_call_delta",
+      value: value as unknown as {
+        toolCallId: string;
+        argsTextDelta: string;
+      },
+    };
+  },
+};
+
+const finishMessageStreamPart: DataStreamPart<
+  "d",
+  "finish_message",
+  {
+    finishReason: LanguageModelV1FinishReason;
+    usage?: {
+      promptTokens: number;
+      completionTokens: number;
+    };
+  }
+> = {
+  code: "d",
+  name: "finish_message",
+  parse: (value: JSONValue) => {
+    if (
+      value == null ||
+      typeof value !== "object" ||
+      !("finishReason" in value) ||
+      typeof value.finishReason !== "string"
+    ) {
+      throw new Error(
+        '"finish_message" parts expect an object with a "finishReason" property.'
+      );
+    }
+
+    const result: {
+      finishReason: LanguageModelV1FinishReason;
+      usage?: {
+        promptTokens: number;
+        completionTokens: number;
+      };
+    } = {
+      finishReason: value.finishReason as LanguageModelV1FinishReason,
+    };
+
+    if (
+      "usage" in value &&
+      value.usage != null &&
+      typeof value.usage === "object" &&
+      "promptTokens" in value.usage &&
+      "completionTokens" in value.usage
+    ) {
+      result.usage = {
+        promptTokens:
+          typeof value.usage.promptTokens === "number"
+            ? value.usage.promptTokens
+            : Number.NaN,
+        completionTokens:
+          typeof value.usage.completionTokens === "number"
+            ? value.usage.completionTokens
+            : Number.NaN,
+      };
+    }
+
+    return {
+      type: "finish_message",
+      value: result,
+    };
+  },
+};
+
+const finishStepStreamPart: DataStreamPart<
+  "e",
+  "finish_step",
+  {
+    isContinued: boolean;
+    finishReason: LanguageModelV1FinishReason;
+    usage?: {
+      promptTokens: number;
+      completionTokens: number;
+    };
+  }
+> = {
+  code: "e",
+  name: "finish_step",
+  parse: (value: JSONValue) => {
+    if (
+      value == null ||
+      typeof value !== "object" ||
+      !("finishReason" in value) ||
+      typeof value.finishReason !== "string"
+    ) {
+      throw new Error(
+        '"finish_step" parts expect an object with a "finishReason" property.'
+      );
+    }
+
+    const result: {
+      isContinued: boolean;
+      finishReason: LanguageModelV1FinishReason;
+      usage?: {
+        promptTokens: number;
+        completionTokens: number;
+      };
+    } = {
+      finishReason: value.finishReason as LanguageModelV1FinishReason,
+      isContinued: false,
+    };
+
+    if (
+      "usage" in value &&
+      value.usage != null &&
+      typeof value.usage === "object" &&
+      "promptTokens" in value.usage &&
+      "completionTokens" in value.usage
+    ) {
+      result.usage = {
+        promptTokens:
+          typeof value.usage.promptTokens === "number"
+            ? value.usage.promptTokens
+            : Number.NaN,
+        completionTokens:
+          typeof value.usage.completionTokens === "number"
+            ? value.usage.completionTokens
+            : Number.NaN,
+      };
+    }
+
+    if ("isContinued" in value && typeof value.isContinued === "boolean") {
+      result.isContinued = value.isContinued;
+    }
+
+    return {
+      type: "finish_step",
+      value: result,
+    };
+  },
+};
+
+const startStepStreamPart: DataStreamPart<
+  "f",
+  "start_step",
+  {
+    messageId: string;
+  }
+> = {
+  code: "f",
+  name: "start_step",
+  parse: (value: JSONValue) => {
+    if (
+      value == null ||
+      typeof value !== "object" ||
+      !("messageId" in value) ||
+      typeof value.messageId !== "string"
+    ) {
+      throw new Error(
+        '"start_step" parts expect an object with an "id" property.'
+      );
+    }
+
+    return {
+      type: "start_step",
+      value: {
+        messageId: value.messageId,
+      },
+    };
+  },
+};
+
+const reasoningStreamPart: DataStreamPart<"g", "reasoning", string> = {
+  code: "g",
+  name: "reasoning",
+  parse: (value: JSONValue) => {
+    if (typeof value !== "string") {
+      throw new Error('"reasoning" parts expect a string value.');
+    }
+    return { type: "reasoning", value };
+  },
+};
+
+const dataStreamParts = [
+  textStreamPart,
+  dataStreamPart,
+  errorStreamPart,
+  messageAnnotationsStreamPart,
+  toolCallStreamPart,
+  toolResultStreamPart,
+  toolCallStreamingStartStreamPart,
+  toolCallDeltaStreamPart,
+  finishMessageStreamPart,
+  finishStepStreamPart,
+  startStepStreamPart,
+  reasoningStreamPart,
+] as const;
+
+type DataStreamParts =
+  | typeof textStreamPart
+  | typeof dataStreamPart
+  | typeof errorStreamPart
+  | typeof messageAnnotationsStreamPart
+  | typeof toolCallStreamPart
+  | typeof toolResultStreamPart
+  | typeof toolCallStreamingStartStreamPart
+  | typeof toolCallDeltaStreamPart
+  | typeof finishMessageStreamPart
+  | typeof finishStepStreamPart
+  | typeof startStepStreamPart
+  | typeof reasoningStreamPart;
+
+/**
+ * Maps the type of a stream part to its value type.
+ */
+type DataStreamPartValueType = {
+  [P in DataStreamParts as P["name"]]: ReturnType<P["parse"]>["value"];
+};
+
+export type DataStreamPartType =
+  | ReturnType<typeof textStreamPart.parse>
+  | ReturnType<typeof dataStreamPart.parse>
+  | ReturnType<typeof errorStreamPart.parse>
+  | ReturnType<typeof messageAnnotationsStreamPart.parse>
+  | ReturnType<typeof toolCallStreamPart.parse>
+  | ReturnType<typeof toolResultStreamPart.parse>
+  | ReturnType<typeof toolCallStreamingStartStreamPart.parse>
+  | ReturnType<typeof toolCallDeltaStreamPart.parse>
+  | ReturnType<typeof finishMessageStreamPart.parse>
+  | ReturnType<typeof finishStepStreamPart.parse>
+  | ReturnType<typeof startStepStreamPart.parse>
+  | ReturnType<typeof reasoningStreamPart.parse>;
+
+export const dataStreamPartsByCode = {
+  [textStreamPart.code]: textStreamPart,
+  [dataStreamPart.code]: dataStreamPart,
+  [errorStreamPart.code]: errorStreamPart,
+  [messageAnnotationsStreamPart.code]: messageAnnotationsStreamPart,
+  [toolCallStreamPart.code]: toolCallStreamPart,
+  [toolResultStreamPart.code]: toolResultStreamPart,
+  [toolCallStreamingStartStreamPart.code]: toolCallStreamingStartStreamPart,
+  [toolCallDeltaStreamPart.code]: toolCallDeltaStreamPart,
+  [finishMessageStreamPart.code]: finishMessageStreamPart,
+  [finishStepStreamPart.code]: finishStepStreamPart,
+  [startStepStreamPart.code]: startStepStreamPart,
+  [reasoningStreamPart.code]: reasoningStreamPart,
+} as const;
+
+/**
+ * The map of prefixes for data in the stream
+ *
+ * - 0: Text from the LLM response
+ * - 1: (OpenAI) function_call responses
+ * - 2: custom JSON added by the user using `Data`
+ * - 6: (OpenAI) tool_call responses
+ *
+ * Example:
+ * ```
+ * 0:Vercel
+ * 0:'s
+ * 0: AI
+ * 0: AI
+ * 0: SDK
+ * 0: is great
+ * 0:!
+ * 2: { "someJson": "value" }
+ * 1: {"function_call": {"name": "get_current_weather", "arguments": "{\\n\\"location\\": \\"Charlottesville, Virginia\\",\\n\\"format\\": \\"celsius\\"\\n}"}}
+ * 6: {"tool_call": {"id": "tool_0", "type": "function", "function": {"name": "get_current_weather", "arguments": "{\\n\\"location\\": \\"Charlottesville, Virginia\\",\\n\\"format\\": \\"celsius\\"\\n}"}}}
+ *```
+ */
+export const DataStreamStringPrefixes = {
+  [textStreamPart.name]: textStreamPart.code,
+  [dataStreamPart.name]: dataStreamPart.code,
+  [errorStreamPart.name]: errorStreamPart.code,
+  [messageAnnotationsStreamPart.name]: messageAnnotationsStreamPart.code,
+  [toolCallStreamPart.name]: toolCallStreamPart.code,
+  [toolResultStreamPart.name]: toolResultStreamPart.code,
+  [toolCallStreamingStartStreamPart.name]:
+    toolCallStreamingStartStreamPart.code,
+  [toolCallDeltaStreamPart.name]: toolCallDeltaStreamPart.code,
+  [finishMessageStreamPart.name]: finishMessageStreamPart.code,
+  [finishStepStreamPart.name]: finishStepStreamPart.code,
+  [startStepStreamPart.name]: startStepStreamPart.code,
+  [reasoningStreamPart.name]: reasoningStreamPart.code,
+} as const;
+
+export const validCodes = dataStreamParts.map((part) => part.code);
+
+/**
+Parses a stream part from a string.
+
+@param line The string to parse.
+@returns The parsed stream part.
+@throws An error if the string cannot be parsed.
+ */
+export const parseDataStreamPart = (line: string): DataStreamPartType => {
+  const firstSeparatorIndex = line.indexOf(":");
+
+  if (firstSeparatorIndex === -1) {
+    throw new Error("Failed to parse stream string. No separator found.");
+  }
+
+  const prefix = line.slice(0, firstSeparatorIndex);
+
+  if (!validCodes.includes(prefix as keyof typeof dataStreamPartsByCode)) {
+    throw new Error(`Failed to parse stream string. Invalid code ${prefix}.`);
+  }
+
+  const code = prefix as keyof typeof dataStreamPartsByCode;
+
+  const textValue = line.slice(firstSeparatorIndex + 1);
+  const jsonValue: JSONValue = JSON.parse(textValue);
+
+  return dataStreamPartsByCode[code].parse(jsonValue);
+};
+
+/**
+Prepends a string with a prefix from the `StreamChunkPrefixes`, JSON-ifies it,
+and appends a new line.
+
+It ensures type-safety for the part type and value.
+ */
+export function formatDataStreamPart<T extends keyof DataStreamPartValueType>(
+  type: T,
+  value: DataStreamPartValueType[T]
+): DataStreamString {
+  const streamPart = dataStreamParts.find((part) => part.name === type);
+
+  if (!streamPart) {
+    throw new Error(`Invalid stream part type: ${type}`);
+  }
+
+  return `${streamPart.code}:${JSON.stringify(value)}\n`;
+}
+````

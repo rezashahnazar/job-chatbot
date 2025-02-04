@@ -1,0 +1,46 @@
+// This is your Prisma schema file
+// Learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "./generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL") // PostgreSQL connection URL
+}
+
+// Model for storing job positions
+model Job {
+  id           String        @id @default(cuid())
+  title        String
+  description  String        @db.Text
+  requirements String        @db.Text
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  applications Application[]
+}
+
+// Model for storing job applications
+model Application {
+  id         String            @id @default(cuid())
+  jobId      String
+  job        Job               @relation(fields: [jobId], references: [id])
+  name       String
+  email      String
+  resumeUrl  String            @db.Text // URL to the stored resume in blob storage
+  resumeText String            @db.Text // Extracted text from the resume for analysis
+  status     ApplicationStatus @default(PENDING)
+  matchScore Float? // AI-generated match score
+  feedback   String?           @db.Text // AI-generated feedback
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+}
+
+enum ApplicationStatus {
+  PENDING
+  REVIEWED
+  SHORTLISTED
+  REJECTED
+}

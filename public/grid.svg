@@ -1,0 +1,29 @@
+<svg width="100" height="100" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- Main grid lines -->
+  <pattern id="mainGrid" x="0" y="0" width="50" height="50" patternUnits="userSpaceOnUse">
+    <path d="M 50 0 L 50 50 M 0 50 L 50 50" 
+          fill="none" 
+          stroke="currentColor" 
+          stroke-width="0.8"
+          stroke-dasharray="1 2" />
+  </pattern>
+  
+  <!-- Subtle background grid -->
+  <pattern id="subGrid" x="0" y="0" width="10" height="10" patternUnits="userSpaceOnUse">
+    <path d="M 10 0 L 10 10 M 0 10 L 10 10" 
+          fill="none" 
+          stroke="currentColor" 
+          stroke-width="0.3"
+          stroke-dasharray="0.7 1.5" />
+  </pattern>
+
+  <!-- Decorative dots at intersections -->
+  <pattern id="dots" x="0" y="0" width="50" height="50" patternUnits="userSpaceOnUse">
+    <circle cx="50" cy="50" r="1" fill="currentColor" opacity="0.7" />
+  </pattern>
+
+  <!-- Background rectangle with all patterns -->
+  <rect width="100" height="100" fill="url(#subGrid)" />
+  <rect width="100" height="100" fill="url(#mainGrid)" />
+  <rect width="100" height="100" fill="url(#dots)" />
+</svg> 
