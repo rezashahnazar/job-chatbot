@@ -23,6 +23,8 @@ export function ChatInput({
   stopChat,
   stopGithub,
 }: ChatInputProps) {
+  const isLoading = isChatLoading || isGithubLoading;
+
   return (
     <div className="border-t p-4 bg-background/50">
       <form onSubmit={handleMessageSubmit} className="flex gap-2">
@@ -33,17 +35,10 @@ export function ChatInput({
           placeholder="پیام خود را بنویسید... (Enter برای ارسال، Shift + Enter برای خط جدید)"
           className="flex-1 resize-none rounded-md border bg-background/50 p-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary min-h-[44px]"
           maxRows={5}
+          disabled={isLoading}
         />
         <div className="flex flex-col gap-2">
-          <Button
-            type="submit"
-            size="icon"
-            className="h-11 w-11"
-            disabled={isChatLoading || isGithubLoading || !chatInput.trim()}
-          >
-            <Send className="h-4 w-4" />
-          </Button>
-          {(isChatLoading || isGithubLoading) && (
+          {isLoading ? (
             <Button
               type="button"
               size="icon"
@@ -55,6 +50,15 @@ export function ChatInput({
               }}
             >
               <Square className="h-4 w-4" />
+            </Button>
+          ) : (
+            <Button
+              type="submit"
+              size="icon"
+              className="h-11 w-11"
+              disabled={!chatInput.trim()}
+            >
+              <Send className="h-4 w-4" />
             </Button>
           )}
         </div>

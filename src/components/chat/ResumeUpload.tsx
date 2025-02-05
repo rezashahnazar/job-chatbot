@@ -113,7 +113,6 @@ export function ResumeUpload({
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop: (files) => {
-      console.log("File dropped:", files[0]);
       setFile(files[0] || null);
     },
     accept: { "application/pdf": [".pdf"] },

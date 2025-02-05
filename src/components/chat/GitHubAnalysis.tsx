@@ -1,4 +1,4 @@
-import { Github, Loader2 } from "lucide-react";
+import { Github, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
@@ -8,6 +8,7 @@ interface GitHubAnalysisProps {
   handleGithubInputChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   handleGithubSubmit: (e: React.FormEvent) => void;
   isGithubLoading: boolean;
+  stopGithub: () => void;
 }
 
 export function GitHubAnalysis({
@@ -15,6 +16,7 @@ export function GitHubAnalysis({
   handleGithubInputChange,
   handleGithubSubmit,
   isGithubLoading,
+  stopGithub,
 }: GitHubAnalysisProps) {
   return (
     <Card className="overflow-hidden">
@@ -40,21 +42,23 @@ export function GitHubAnalysis({
             onChange={handleGithubInputChange}
             className="bg-background/50 text-left"
             dir="ltr"
+            disabled={isGithubLoading}
           />
-          <Button
-            type="submit"
-            className="w-full"
-            disabled={isGithubLoading || !githubInput}
-          >
-            {isGithubLoading ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                در حال آنالیز...
-              </>
-            ) : (
-              "آنالیز مخزن"
-            )}
-          </Button>
+          {isGithubLoading ? (
+            <Button
+              type="button"
+              className="w-full"
+              variant="outline"
+              onClick={stopGithub}
+            >
+              <Square className="mr-2 h-4 w-4" />
+              توقف آنالیز
+            </Button>
+          ) : (
+            <Button type="submit" className="w-full" disabled={!githubInput}>
+              آنالیز مخزن
+            </Button>
+          )}
         </form>
       </div>
     </Card>

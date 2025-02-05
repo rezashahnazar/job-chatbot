@@ -180,6 +180,7 @@ export default function JobChat() {
           handleGithubInputChange={handleGithubInputChange}
           handleGithubSubmit={handleGithubSubmit}
           isGithubLoading={isGithubLoading}
+          stopGithub={stopGithub}
         />
       </div>
 
