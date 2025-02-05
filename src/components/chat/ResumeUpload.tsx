@@ -25,12 +25,14 @@ interface ResumeUploadProps {
   setChatMessages: (
     messages: Message[] | ((prev: Message[]) => Message[])
   ) => void;
+  scrollToBottom: () => void;
 }
 
 export function ResumeUpload({
   jobs,
   jobsLoading,
   setChatMessages,
+  scrollToBottom,
 }: ResumeUploadProps) {
   const [file, setFile] = useState<File | null>(null);
   const [name, setName] = useState("");
@@ -71,6 +73,10 @@ export function ResumeUpload({
       const systemMessage = createResumeSystemMessage(data.analysis);
       const notificationMessage = createResumeNotification();
 
+      // Add current timestamp to messages
+      systemMessage.createdAt = new Date();
+      notificationMessage.createdAt = new Date();
+
       // Update chat messages
       setChatMessages((prevMessages) => {
         // Find the last system message index (if any)
@@ -79,16 +85,19 @@ export function ResumeUpload({
           .findIndex((m) => m.role === "system");
 
         if (lastSystemIndex === -1) {
-          // No system message exists, add to the beginning
-          return [systemMessage, ...prevMessages, notificationMessage];
+          // No system message exists, add to the end
+          return [...prevMessages, systemMessage, notificationMessage];
         } else {
-          // Replace the existing system message
+          // Replace the existing system message and add notification at the end
           const actualIndex = prevMessages.length - 1 - lastSystemIndex;
           const newMessages = [...prevMessages];
           newMessages[actualIndex] = systemMessage;
           return [...newMessages, notificationMessage];
         }
       });
+
+      // Scroll to bottom after messages are updated
+      setTimeout(() => scrollToBottom(), 100);
 
       // Clear the form
       setName("");

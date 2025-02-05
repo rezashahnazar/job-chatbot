@@ -38,17 +38,6 @@ export default function JobChat() {
   } = useChat({
     api: "/api/github",
     id: "github-analysis",
-    onFinish: (message) => {
-      // Add the GitHub analysis result to the chat context
-      const systemMessage = {
-        id: `github-${message.id}`,
-        content: message.content,
-        role: "system",
-        createdAt: new Date(),
-      } as Message;
-
-      setChatMessages((prev) => [...prev, systemMessage]);
-    },
   });
 
   // Refs
@@ -182,6 +171,7 @@ export default function JobChat() {
           jobs={jobs}
           jobsLoading={jobsLoading}
           setChatMessages={setChatMessages}
+          scrollToBottom={scrollToBottom}
         />
 
         {/* GitHub Analysis Card */}
