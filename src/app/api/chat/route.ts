@@ -1,72 +1,73 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import { streamText, smoothStream } from "ai";
 import { Message } from "ai";
+import { prisma } from "@/lib/db";
 
 const openai = createOpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   baseURL: process.env.OPENAI_BASE_URL,
 });
 
-// IMPORTANT: Set the runtime to edge
-export const runtime = "edge";
-
-const systemPrompt = `You are a helpful and friendly job application assistant chatbot for a company. 
-You can provide information about two job positions:
-1. Product Marketing Manager
-2. Product Marketing Full-Stack Developer
-
-You should help users understand these positions, their requirements, and assist them in determining if they're a good fit.
-You should communicate in Persian (Farsi) language and be polite and professional.
-You can also analyze resumes and provide feedback on how well they match with these positions.
-You can analyze GitHub repositories and provide insights about the code and projects.
-
-When users ask about positions, provide detailed information about:
-- Role responsibilities
-- Required skills and qualifications
-- Experience level needed
-- Key expectations
-
-Always maintain a helpful and encouraging tone while being honest about requirements and fit.
-If a user's qualifications don't match well with a position, suggest areas for improvement or alternative positions that might be a better fit.`;
+// Change runtime to nodejs for Prisma compatibility
+export const runtime = "nodejs";
 
 export async function POST(req: Request) {
   const { messages } = await req.json();
+
+  // Fetch job details from the database
+  const jobs = await prisma.job.findMany({
+    select: {
+      title: true,
+      description: true,
+      requirements: true,
+    },
+  });
+
+  // Format job details for the prompt
+  const jobDetails = jobs
+    .map(
+      (job) => `
+موقعیت شغلی: ${job.title}
+
+شرح موقعیت:
+${job.description}
+
+شرایط و نیازمندی‌ها:
+${job.requirements}
+`
+    )
+    .join("\n\n---\n\n");
 
   // Find system messages containing resume and GitHub information
   const systemMessages = messages.filter((m: Message) => m.role === "system");
   const resumeContext =
     systemMessages.find((m: Message) =>
-      m.content?.startsWith("User's Resume Analysis")
+      m.content?.startsWith("تحلیل رزومه شما:")
     )?.content || "";
   const githubContext =
-    systemMessages.find((m: Message) =>
-      m.content?.startsWith("GitHub Repository Analysis")
-    )?.content || "";
+    systemMessages.find((m: Message) => m.content?.includes("نمای کلی پروژه"))
+      ?.content || "";
 
-  // Create an enhanced system prompt with all available context
-  const enhancedSystemPrompt = `${systemPrompt}
+  // Create the system prompt
+  const systemPrompt = `شما یک دستیار هوشمند استخدام هستید که به کاربران در مورد موقعیت‌های شغلی، رزومه و مخزن گیت‌هاب آنها مشاوره می‌دهید.
 
-${
-  resumeContext
-    ? `Resume Analysis Context:
-${resumeContext}`
-    : ""
-}
+${resumeContext ? `\n### اطلاعات رزومه:\n${resumeContext}` : ""}
+${githubContext ? `\n### اطلاعات مخزن گیت‌هاب:\n${githubContext}` : ""}
+${jobDetails ? `\n### موقعیت‌های شغلی موجود:\n${jobDetails}` : ""}
 
-${githubContext ? `${githubContext}` : ""}
+لطفاً با توجه به این اطلاعات به سؤالات کاربر پاسخ دهید.`;
 
-${
-  resumeContext || githubContext
-    ? "Remember to use this contextual information when answering questions about the user's qualifications, projects, and providing career advice."
-    : ""
-}`;
+  try {
+    const stream = await streamText({
+      model: openai("gpt-4o-mini"),
+      system: systemPrompt,
+      messages: messages.filter((m: Message) => m.role !== "system"),
+      experimental_transform: [smoothStream()],
+    });
 
-  const stream = await streamText({
-    model: openai("gpt-4o-mini"),
-    system: enhancedSystemPrompt,
-    messages: messages.filter((m: Message) => m.role !== "system"), // Remove system messages from chat history
-    experimental_transform: [smoothStream()],
-  });
-
-  return stream.toDataStreamResponse();
+    return stream.toDataStreamResponse();
+  } catch (error) {
+    console.error("OpenAI API error:", error);
+    return new Response("Error: " + (error as Error).message, { status: 500 });
+  }
 }

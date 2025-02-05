@@ -25,7 +25,7 @@ const openai = createOpenAI({
   baseURL: process.env.OPENAI_BASE_URL,
 });
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 async function fetchRepoContent(repoUrl: string) {
   // Extract owner and repo from URL
@@ -122,6 +122,16 @@ async function fetchRepoContent(repoUrl: string) {
   );
   const commits = await commitsResponse.json();
 
+  // Ensure commits is an array before mapping
+  const recentCommits = Array.isArray(commits)
+    ? commits.map((commit: GitHubCommit) => ({
+        sha: commit.sha,
+        message: commit.commit.message,
+        author: commit.commit.author.name,
+        date: commit.commit.author.date,
+      }))
+    : [];
+
   return {
     name: repoInfo.name,
     description: repoInfo.description,
@@ -142,23 +152,58 @@ async function fetchRepoContent(repoUrl: string) {
     })),
     importantFiles: fileContents,
     codeSamples,
-    recentCommits: (commits as GitHubCommit[]).map((commit) => ({
-      sha: commit.sha,
-      message: commit.commit.message,
-      author: commit.commit.author.name,
-      date: commit.commit.author.date,
-    })),
+    recentCommits,
   };
 }
 
 export async function POST(req: Request) {
   try {
-    const { messages } = await req.json();
+    const body = await req.json();
 
-    const repoUrl = messages[messages.length - 1].content;
+    // Handle both direct URL and chat message formats
+    let repoUrl: string;
+    let existingMessages = [];
+
+    if (body.url) {
+      // Direct URL format
+      repoUrl = body.url;
+      existingMessages = [
+        {
+          id: Date.now().toString(),
+          role: "user",
+          content: repoUrl,
+          createdAt: new Date(),
+        },
+      ];
+    } else if (body.messages) {
+      // Chat message format
+      const { messages } = body;
+      if (!Array.isArray(messages) || messages.length === 0) {
+        return NextResponse.json(
+          { error: "لطفاً یک آدرس معتبر مخزن گیت‌هاب وارد کنید" },
+          { status: 400 }
+        );
+      }
+
+      const lastMessage = messages[messages.length - 1];
+      if (!lastMessage?.content) {
+        return NextResponse.json(
+          { error: "لطفاً یک آدرس معتبر مخزن گیت‌هاب وارد کنید" },
+          { status: 400 }
+        );
+      }
+      repoUrl = lastMessage.content;
+      existingMessages = messages;
+    } else {
+      return NextResponse.json(
+        { error: "لطفاً یک آدرس معتبر مخزن گیت‌هاب وارد کنید" },
+        { status: 400 }
+      );
+    }
+
     if (!repoUrl || !repoUrl.startsWith("https://github.com/")) {
       return NextResponse.json(
-        { error: "Invalid GitHub repository URL" },
+        { error: "لطفاً یک آدرس معتبر مخزن گیت‌هاب وارد کنید" },
         { status: 400 }
       );
     }
@@ -169,56 +214,56 @@ export async function POST(req: Request) {
     const response = await streamText({
       model: openai("gpt-4o-mini"),
       experimental_transform: [smoothStream()],
-      system: `You are a technical recruiter evaluating GitHub repositories. Analyze the repository information and provide a detailed evaluation focusing on:
-1. Project Overview
-   - Basic repository information
-   - Project purpose and goals
-   - Technology stack and dependencies
+      system: `شما یک متخصص تحلیل کد و مخازن گیت‌هاب هستید. لطفاً مخزن زیر را تحلیل کنید و موارد زیر را بررسی کنید:
 
-2. Code Quality Analysis
-   - Code organization and structure
-   - Coding standards and conventions
-   - Error handling and logging
-   - Comments and documentation
-   - Sample code analysis with specific examples
+1. نمای کلی پروژه
+   - اطلاعات پایه مخزن
+   - هدف و کاربرد پروژه
+   - تکنولوژی‌ها و وابستگی‌ها
 
-3. Development Practices
-   - Git commit history and patterns
-   - Testing approach (if present)
-   - CI/CD implementation (if present)
-   - Code review practices (if visible)
+2. تحلیل کیفیت کد
+   - سازماندهی و ساختار کد
+   - استانداردها و قراردادهای کدنویسی
+   - مدیریت خطا و لاگ‌گیری
+   - مستندات و توضیحات
+   - تحلیل نمونه کدها با مثال‌های مشخص
 
-4. Technical Skills Demonstrated
-   - Programming languages used
-   - Frameworks and libraries
-   - Architecture patterns
-   - Problem-solving approaches
+3. روش‌های توسعه
+   - تاریخچه کامیت‌ها و الگوها
+   - رویکرد تست (در صورت وجود)
+   - پیاده‌سازی CI/CD (در صورت وجود)
+   - روش‌های بررسی کد
 
-5. Project Structure
-   - Directory organization
-   - Configuration management
-   - Resource organization
-   - Build and deployment setup
+4. مهارت‌های فنی نمایش داده شده
+   - زبان‌های برنامه‌نویسی استفاده شده
+   - فریم‌ورک‌ها و کتابخانه‌ها
+   - الگوهای معماری
+   - رویکردهای حل مسئله
 
-6. Areas for Improvement
-   - Code quality suggestions
-   - Architecture recommendations
-   - Testing coverage
-   - Documentation completeness
+5. ساختار پروژه
+   - سازماندهی دایرکتوری‌ها
+   - مدیریت تنظیمات
+   - سازماندهی منابع
+   - تنظیمات ساخت و استقرار
 
-7. Overall Assessment
-   - Project maturity
-   - Code maintainability
-   - Technical sophistication
-   - Best practices followed
+6. زمینه‌های بهبود
+   - پیشنهادات بهبود کیفیت کد
+   - توصیه‌های معماری
+   - پوشش تست
+   - کامل بودن مستندات
 
-Include specific code examples when discussing interesting patterns or areas for improvement. Format code blocks using markdown.
-Provide the analysis in Persian (Farsi) language.`,
+7. ارزیابی کلی
+   - بلوغ پروژه
+   - قابلیت نگهداری کد
+   - پیچیدگی فنی
+   - رعایت بهترین شیوه‌ها
+
+در صورت مشاهده الگوها یا زمینه‌های بهبود جالب، نمونه کد خاص را ذکر کنید. بلوک‌های کد را با مارک‌داون فرمت کنید.`,
       messages: [
-        ...messages,
+        ...existingMessages,
         {
           role: "assistant",
-          content: `تحلیل مخزن گیت‌هاب:\n\nدر حال بررسی مخزن ${repoUrl}...\n\n${JSON.stringify(
+          content: `در حال تحلیل مخزن ${repoUrl}...\n\n${JSON.stringify(
             repoContent,
             null,
             2
@@ -231,7 +276,7 @@ Provide the analysis in Persian (Farsi) language.`,
   } catch (error) {
     console.error("GitHub analysis error:", error);
     return NextResponse.json(
-      { error: "Failed to analyze repository" },
+      { error: "خطا در تحلیل مخزن گیت‌هاب" },
       { status: 500 }
     );
   }

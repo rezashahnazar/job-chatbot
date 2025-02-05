@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { OpenAI } from "openai";
-import { writeFile } from "fs/promises";
-import { join } from "path";
 import PDFParser from "pdf2json";
 import { prisma } from "@/lib/db";
+import { put } from "@vercel/blob";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -21,10 +20,10 @@ export async function POST(req: NextRequest) {
     const file = formData.get("resume") as File;
     const name = formData.get("name") as string;
     const email = formData.get("email") as string;
-    const position = formData.get("position") as string;
+    const jobId = formData.get("position") as string;
 
     // Validate required fields
-    if (!file || !name || !email || !position) {
+    if (!file || !name || !email || !jobId) {
       return NextResponse.json(
         { error: "Missing required fields (name, email, position, resume)" },
         { status: 400 }
@@ -39,14 +38,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Convert File to Buffer
+    // Convert File to Buffer for PDF parsing
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
     try {
-      // Save file first
-      const fileName = `${Date.now()}-${file.name}`;
-      await writeFile(join(process.cwd(), "uploads", fileName), buffer);
+      // Upload file to Vercel Blob
+      const blob = await put(`resumes/${Date.now()}-${file.name}`, file, {
+        access: "public",
+        addRandomSuffix: true,
+      });
 
       // Convert buffer to text using pdf2json
       const pdfParser = new PDFParser();
@@ -77,10 +78,10 @@ export async function POST(req: NextRequest) {
         throw new Error("No text found in PDF");
       }
 
-      // Get job details from database
-      const job = await prisma.job.findFirst({
+      // Get job details from database using ID
+      const job = await prisma.job.findUnique({
         where: {
-          title: position,
+          id: jobId,
         },
       });
 
@@ -99,7 +100,7 @@ export async function POST(req: NextRequest) {
             {
               role: "system",
               content: `You are a professional HR assistant analyzing resumes for job positions. 
-                       Analyze the resume for the ${position} position with these requirements:
+                       Analyze the resume for the ${job.title} position with these requirements:
                        ${job.requirements}
                        
                        Provide:
@@ -123,13 +124,13 @@ export async function POST(req: NextRequest) {
           analysis.choices[0]?.message?.content || "{}"
         );
 
-        // Save application to database
+        // Save application to database with Blob URL
         const application = await prisma.application.create({
           data: {
-            jobId: job.id,
+            jobId,
             name,
             email,
-            resumeUrl: fileName,
+            resumeUrl: blob.url,
             resumeText: pdfText as string,
             feedback: aiResponse.feedback || "",
             matchScore: parseFloat(aiResponse.score) || 0,
@@ -140,6 +141,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({
           success: true,
           applicationId: application.id,
+          resumeUrl: blob.url,
           analysis: {
             score: aiResponse.score,
             strengths: aiResponse.strengths,
