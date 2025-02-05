@@ -15,7 +15,6 @@ import {
 import { Job, Message } from "@/types/chat";
 import {
   createResumeNotification,
-  createResumeResultMessage,
   createResumeSystemMessage,
 } from "@/utils/chat";
 
